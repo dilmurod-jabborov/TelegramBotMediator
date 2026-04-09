@@ -79,6 +79,18 @@ dotnet build TelegramBotMediator.sln
 dotnet run --project TelegramBotMediator.Presentation/TelegramBotMediator.Presentation.csproj
 ```
 
+## Render deploy
+
+This repository includes `Dockerfile` and `render.yaml` for quick Render deployment.
+
+1. Push changes to GitHub.
+2. In Render, create a new **Blueprint** service from this repo (it reads `render.yaml`).
+3. Set secret env var:
+   - `BotSettings__Token` = your current bot token
+4. Keep disk mount at `/var/data` (already defined in `render.yaml`).
+
+The bot will use SQLite file at `/var/data/telegram-bot.db`.
+
 ## How relay works
 
 1. Registered user sends any message.
