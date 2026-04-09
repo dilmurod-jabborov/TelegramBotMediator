@@ -16,7 +16,7 @@ using TelegramBotMediator.Presentation.Services;
 var builder = Host.CreateApplicationBuilder(args);
 builder.Configuration
     .SetBasePath(AppContext.BaseDirectory)
-    .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+    .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
     .AddEnvironmentVariables();
 
 builder.Services.AddLogging(logging =>
