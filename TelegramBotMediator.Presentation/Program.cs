@@ -71,14 +71,7 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    if (db.Database.IsNpgsql())
-    {
-        await db.Database.EnsureCreatedAsync();
-    }
-    else
-    {
-        await db.Database.MigrateAsync();
-    }
+    await db.Database.MigrateAsync();
 }
 
 if (botSettings.UseWebhook)
