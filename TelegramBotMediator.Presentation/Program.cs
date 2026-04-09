@@ -71,6 +71,7 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await TryBaselineExistingPostgresSchemaAsync(db);
     await db.Database.MigrateAsync();
 }
 
@@ -85,3 +86,37 @@ if (botSettings.UseWebhook)
 }
 
 await app.RunAsync();
+
+static async Task TryBaselineExistingPostgresSchemaAsync(AppDbContext dbContext)
+{
+    if (!dbContext.Database.IsNpgsql())
+    {
+        return;
+    }
+
+    var appliedMigrations = await dbContext.Database.GetAppliedMigrationsAsync();
+    if (appliedMigrations.Any())
+    {
+        return;
+    }
+
+    const string baselineSql = """
+                               DO $$
+                               BEGIN
+                                   IF to_regclass('"Users"') IS NOT NULL
+                                      AND to_regclass('"MessageRelayMaps"') IS NOT NULL THEN
+                                       CREATE TABLE IF NOT EXISTS "__EFMigrationsHistory" (
+                                           "MigrationId" character varying(150) NOT NULL,
+                                           "ProductVersion" character varying(32) NOT NULL,
+                                           CONSTRAINT "PK___EFMigrationsHistory" PRIMARY KEY ("MigrationId")
+                                       );
+
+                                       INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion")
+                                       VALUES ('20260409101510_InitialCreate', '8.0.5')
+                                       ON CONFLICT ("MigrationId") DO NOTHING;
+                                   END IF;
+                               END $$;
+                               """;
+
+    await dbContext.Database.ExecuteSqlRawAsync(baselineSql);
+}
