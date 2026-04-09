@@ -46,6 +46,12 @@ Edit `TelegramBotMediator.Presentation/appsettings.json`:
 }
 ```
 
+You can copy from template:
+
+```bash
+cp TelegramBotMediator.Presentation/appsettings.Example.json TelegramBotMediator.Presentation/appsettings.json
+```
+
 ## Database and migrations
 
 Initial migration is already added in:
