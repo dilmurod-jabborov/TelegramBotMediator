@@ -9,4 +9,7 @@ public interface IStateService
     void SetState(long telegramId, UserState state);
     UserRegistrationData GetOrCreateRegistrationData(long telegramId);
     void ClearRegistration(long telegramId);
+    void TrackMessage(long telegramId, int messageId);
+    IReadOnlyCollection<int> GetTrackedMessages(long telegramId);
+    void ClearTrackedMessages(long telegramId);
 }

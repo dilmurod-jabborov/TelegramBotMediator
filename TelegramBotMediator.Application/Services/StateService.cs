@@ -9,6 +9,7 @@ public sealed class StateService : IStateService
 {
     private readonly ConcurrentDictionary<long, UserState> _states = new();
     private readonly ConcurrentDictionary<long, UserRegistrationData> _registrations = new();
+    private readonly ConcurrentDictionary<long, ConcurrentQueue<int>> _trackedMessages = new();
 
     public UserState GetState(long telegramId)
     {
@@ -29,5 +30,31 @@ public sealed class StateService : IStateService
     {
         _registrations.TryRemove(telegramId, out _);
         _states.TryRemove(telegramId, out _);
+    }
+
+    public void TrackMessage(long telegramId, int messageId)
+    {
+        var queue = _trackedMessages.GetOrAdd(telegramId, _ => new ConcurrentQueue<int>());
+        queue.Enqueue(messageId);
+
+        // Keep bounded history to avoid unbounded memory growth.
+        while (queue.Count > 100 && queue.TryDequeue(out _))
+        {
+        }
+    }
+
+    public IReadOnlyCollection<int> GetTrackedMessages(long telegramId)
+    {
+        if (!_trackedMessages.TryGetValue(telegramId, out var queue))
+        {
+            return [];
+        }
+
+        return queue.ToArray();
+    }
+
+    public void ClearTrackedMessages(long telegramId)
+    {
+        _trackedMessages.TryRemove(telegramId, out _);
     }
 }
