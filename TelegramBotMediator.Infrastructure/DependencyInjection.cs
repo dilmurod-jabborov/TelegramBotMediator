@@ -18,7 +18,8 @@ public static class DependencyInjection
         {
             if (IsPostgresConnectionString(connectionString))
             {
-                options.UseNpgsql(connectionString);
+                var normalized = NormalizePostgresConnectionString(connectionString);
+                options.UseNpgsql(normalized);
                 return;
             }
 
@@ -38,5 +39,23 @@ public static class DependencyInjection
                || connectionString.Contains("Database=", StringComparison.OrdinalIgnoreCase)
                || connectionString.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase)
                || connectionString.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizePostgresConnectionString(string connectionString)
+    {
+        if (!connectionString.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase)
+            && !connectionString.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase))
+        {
+            return connectionString;
+        }
+
+        var uri = new Uri(connectionString);
+        var userInfo = uri.UserInfo.Split(':', 2);
+        var username = Uri.UnescapeDataString(userInfo.ElementAtOrDefault(0) ?? string.Empty);
+        var password = Uri.UnescapeDataString(userInfo.ElementAtOrDefault(1) ?? string.Empty);
+        var database = uri.AbsolutePath.Trim('/');
+        var port = uri.Port > 0 ? uri.Port : 5432;
+
+        return $"Host={uri.Host};Port={port};Database={database};Username={username};Password={password};SSL Mode=Require;Trust Server Certificate=true";
     }
 }
