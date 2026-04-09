@@ -14,10 +14,29 @@ public static class DependencyInjection
         var connectionString = configuration.GetConnectionString("DefaultConnection")
                                ?? "Data Source=telegram-bot.db";
 
-        services.AddDbContext<AppDbContext>(options => options.UseSqlite(connectionString));
+        services.AddDbContext<AppDbContext>(options =>
+        {
+            if (IsPostgresConnectionString(connectionString))
+            {
+                options.UseNpgsql(connectionString);
+                return;
+            }
+
+            options.UseSqlite(connectionString);
+        });
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IMessageRelayMapRepository, MessageRelayMapRepository>();
 
         return services;
+    }
+
+    private static bool IsPostgresConnectionString(string connectionString)
+    {
+        return connectionString.Contains("Host=", StringComparison.OrdinalIgnoreCase)
+               || connectionString.Contains("Username=", StringComparison.OrdinalIgnoreCase)
+               || connectionString.Contains("Port=", StringComparison.OrdinalIgnoreCase)
+               || connectionString.Contains("Database=", StringComparison.OrdinalIgnoreCase)
+               || connectionString.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase)
+               || connectionString.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase);
     }
 }

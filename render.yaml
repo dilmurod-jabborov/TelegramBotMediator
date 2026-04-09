@@ -5,13 +5,9 @@ services:
     plan: free
     autoDeploy: true
     dockerfilePath: ./Dockerfile
-    disk:
-      name: telegram-bot-data
-      mountPath: /var/data
-      sizeGB: 1
     envVars:
       - key: ConnectionStrings__DefaultConnection
-        value: Data Source=/var/data/telegram-bot.db
+        sync: false
       - key: BotSettings__Token
         sync: false
       - key: BotSettings__AdminTelegramId

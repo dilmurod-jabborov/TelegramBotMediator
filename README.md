@@ -1,6 +1,6 @@
 # TelegramBotMediator
 
-Production-ready Telegram mediator bot on `.NET 8` with `Telegram.Bot`, clean architecture, and SQLite + EF Core.
+Production-ready Telegram mediator bot on `.NET 8` with `Telegram.Bot`, clean architecture, and EF Core (SQLite or PostgreSQL).
 
 ## Project structure
 
@@ -16,7 +16,7 @@ Production-ready Telegram mediator bot on `.NET 8` with `Telegram.Bot`, clean ar
   - Last Name
   - Phone Number (Telegram contact button)
   - Address
-- SQLite user storage
+- User storage with SQLite or PostgreSQL
 - Per-user state tracking:
   - `None`
   - `WaitingForFirstName`
@@ -85,11 +85,12 @@ This repository includes `Dockerfile` and `render.yaml` for quick Render deploym
 
 1. Push changes to GitHub.
 2. In Render, create a new **Blueprint** service from this repo (it reads `render.yaml`).
-3. Set secret env var:
+3. Set secret env vars:
    - `BotSettings__Token` = your current bot token
-4. Keep disk mount at `/var/data` (already defined in `render.yaml`).
+   - `ConnectionStrings__DefaultConnection` = your PostgreSQL connection string
+     (example: `Host=...;Port=5432;Database=...;Username=...;Password=...;SSL Mode=Require;Trust Server Certificate=true`)
 
-The bot will use SQLite file at `/var/data/telegram-bot.db`.
+Recommended: create a free PostgreSQL database (for example Supabase/Neon/Render Postgres) and paste its connection string into `ConnectionStrings__DefaultConnection`.
 
 ## How relay works
 

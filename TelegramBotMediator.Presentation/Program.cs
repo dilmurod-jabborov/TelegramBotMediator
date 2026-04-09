@@ -57,7 +57,14 @@ var host = builder.Build();
 using (var scope = host.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    await db.Database.MigrateAsync();
+    if (db.Database.IsNpgsql())
+    {
+        await db.Database.EnsureCreatedAsync();
+    }
+    else
+    {
+        await db.Database.MigrateAsync();
+    }
 }
 
 await host.RunAsync();
