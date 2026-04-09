@@ -97,7 +97,12 @@ public sealed class TelegramUpdateHandler(
 
             stateService.ClearRegistration(telegramId);
             stateService.SetState(telegramId, UserState.WaitingForFirstName);
-            await SendAndTrackAsync(botClient, message.Chat.Id, telegramId, "Ismingizni kiriting:", cancellationToken: cancellationToken);
+            await SendAndTrackAsync(
+                botClient,
+                message.Chat.Id,
+                telegramId,
+                "Assalomu alaykum, bu bot sizga Zamin supermarketi uchun qarzdorlik bo'yicha limit belgilaydi marhamat qilib ismingizni kiriting!",
+                cancellationToken: cancellationToken);
             return;
         }
 
