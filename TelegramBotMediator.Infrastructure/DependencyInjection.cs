@@ -34,6 +34,7 @@ public static class DependencyInjection
         });
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IMessageRelayMapRepository, MessageRelayMapRepository>();
+        services.AddScoped<IUserSessionRepository, UserSessionRepository>();
 
         return services;
     }

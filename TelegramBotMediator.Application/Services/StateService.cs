@@ -1,60 +1,120 @@
-using System.Collections.Concurrent;
+using System.Text.Json;
+using TelegramBotMediator.Application.Abstractions.Repositories;
 using TelegramBotMediator.Application.Abstractions.Services;
 using TelegramBotMediator.Application.Dtos;
+using TelegramBotMediator.Domain.Entities;
 using TelegramBotMediator.Domain.Enums;
 
 namespace TelegramBotMediator.Application.Services;
 
-public sealed class StateService : IStateService
+public sealed class StateService(IUserSessionRepository userSessionRepository) : IStateService
 {
-    private readonly ConcurrentDictionary<long, UserState> _states = new();
-    private readonly ConcurrentDictionary<long, UserRegistrationData> _registrations = new();
-    private readonly ConcurrentDictionary<long, ConcurrentQueue<int>> _trackedMessages = new();
-
-    public UserState GetState(long telegramId)
+    public async Task<UserState> GetStateAsync(long telegramId, CancellationToken cancellationToken = default)
     {
-        return _states.GetValueOrDefault(telegramId, UserState.None);
+        var session = await userSessionRepository.GetByTelegramIdAsync(telegramId, cancellationToken);
+        return session is null ? UserState.None : (UserState)session.State;
     }
 
-    public void SetState(long telegramId, UserState state)
+    public async Task SetStateAsync(long telegramId, UserState state, CancellationToken cancellationToken = default)
     {
-        _states[telegramId] = state;
+        var session = await GetOrCreateSessionAsync(telegramId, cancellationToken);
+        session.State = (int)state;
+        session.UpdatedAt = DateTime.UtcNow;
+        await userSessionRepository.SaveAsync(session, cancellationToken);
     }
 
-    public UserRegistrationData GetOrCreateRegistrationData(long telegramId)
+    public async Task<UserRegistrationData> GetOrCreateRegistrationDataAsync(long telegramId, CancellationToken cancellationToken = default)
     {
-        return _registrations.GetOrAdd(telegramId, _ => new UserRegistrationData());
-    }
-
-    public void ClearRegistration(long telegramId)
-    {
-        _registrations.TryRemove(telegramId, out _);
-        _states.TryRemove(telegramId, out _);
-    }
-
-    public void TrackMessage(long telegramId, int messageId)
-    {
-        var queue = _trackedMessages.GetOrAdd(telegramId, _ => new ConcurrentQueue<int>());
-        queue.Enqueue(messageId);
-
-        // Keep bounded history to avoid unbounded memory growth.
-        while (queue.Count > 100 && queue.TryDequeue(out _))
+        var session = await GetOrCreateSessionAsync(telegramId, cancellationToken);
+        return new UserRegistrationData
         {
-        }
+            FirstName = session.FirstNameDraft,
+            LastName = session.LastNameDraft,
+            PhoneNumber = session.PhoneDraft,
+            Address = session.AddressDraft
+        };
     }
 
-    public IReadOnlyCollection<int> GetTrackedMessages(long telegramId)
+    public async Task SaveRegistrationDataAsync(long telegramId, UserRegistrationData registrationData, CancellationToken cancellationToken = default)
     {
-        if (!_trackedMessages.TryGetValue(telegramId, out var queue))
+        var session = await GetOrCreateSessionAsync(telegramId, cancellationToken);
+        session.FirstNameDraft = registrationData.FirstName;
+        session.LastNameDraft = registrationData.LastName;
+        session.PhoneDraft = registrationData.PhoneNumber;
+        session.AddressDraft = registrationData.Address;
+        session.UpdatedAt = DateTime.UtcNow;
+        await userSessionRepository.SaveAsync(session, cancellationToken);
+    }
+
+    public async Task ClearRegistrationAsync(long telegramId, CancellationToken cancellationToken = default)
+    {
+        await userSessionRepository.DeleteAsync(telegramId, cancellationToken);
+    }
+
+    public async Task TrackMessageAsync(long telegramId, int messageId, CancellationToken cancellationToken = default)
+    {
+        var session = await GetOrCreateSessionAsync(telegramId, cancellationToken);
+        var ids = ParseTrackedIds(session.TrackedMessageIdsJson);
+        ids.Add(messageId);
+        if (ids.Count > 100)
+        {
+            ids = ids.TakeLast(100).ToList();
+        }
+
+        session.TrackedMessageIdsJson = JsonSerializer.Serialize(ids);
+        session.UpdatedAt = DateTime.UtcNow;
+        await userSessionRepository.SaveAsync(session, cancellationToken);
+    }
+
+    public async Task<IReadOnlyCollection<int>> GetTrackedMessagesAsync(long telegramId, CancellationToken cancellationToken = default)
+    {
+        var session = await userSessionRepository.GetByTelegramIdAsync(telegramId, cancellationToken);
+        if (session is null)
         {
             return [];
         }
 
-        return queue.ToArray();
+        return ParseTrackedIds(session.TrackedMessageIdsJson);
     }
 
-    public void ClearTrackedMessages(long telegramId)
+    public async Task ClearTrackedMessagesAsync(long telegramId, CancellationToken cancellationToken = default)
     {
-        _trackedMessages.TryRemove(telegramId, out _);
+        var session = await userSessionRepository.GetByTelegramIdAsync(telegramId, cancellationToken);
+        if (session is null)
+        {
+            return;
+        }
+
+        session.TrackedMessageIdsJson = "[]";
+        session.UpdatedAt = DateTime.UtcNow;
+        await userSessionRepository.SaveAsync(session, cancellationToken);
+    }
+
+    private async Task<UserSession> GetOrCreateSessionAsync(long telegramId, CancellationToken cancellationToken)
+    {
+        var session = await userSessionRepository.GetByTelegramIdAsync(telegramId, cancellationToken);
+        if (session is not null)
+        {
+            return session;
+        }
+
+        return new UserSession
+        {
+            TelegramId = telegramId,
+            State = (int)UserState.None,
+            UpdatedAt = DateTime.UtcNow
+        };
+    }
+
+    private static List<int> ParseTrackedIds(string json)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<List<int>>(json) ?? [];
+        }
+        catch
+        {
+            return [];
+        }
     }
 }

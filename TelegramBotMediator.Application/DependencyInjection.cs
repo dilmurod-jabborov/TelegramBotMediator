@@ -8,7 +8,8 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddApplication(this IServiceCollection services)
     {
-        services.AddSingleton<IStateService, StateService>();
+        services.AddScoped<IStateService, StateService>();
+        services.AddSingleton<IRateLimitService, RateLimitService>();
         services.AddScoped<IUserService, UserService>();
         return services;
     }

@@ -1,6 +1,6 @@
 # TelegramBotMediator
 
-Production-ready Telegram mediator bot on `.NET 8` with `Telegram.Bot`, clean architecture, and EF Core (SQLite or PostgreSQL).
+Production-ready Telegram mediator bot on `.NET 8` with `Telegram.Bot`, clean architecture, EF Core (SQLite/PostgreSQL), retry policies, and structured logging.
 
 ## Project structure
 
@@ -17,6 +17,7 @@ Production-ready Telegram mediator bot on `.NET 8` with `Telegram.Bot`, clean ar
   - Phone Number (Telegram contact button)
   - Address
 - User storage with SQLite or PostgreSQL
+- DB-backed user session/state persistence (survives restarts)
 - Per-user state tracking:
   - `None`
   - `WaitingForFirstName`
@@ -28,7 +29,14 @@ Production-ready Telegram mediator bot on `.NET 8` with `Telegram.Bot`, clean ar
 - Admin reply routing back to exact user using message mapping table
 - Admin-only commands:
   - `/users` - list registered users
+  - `/stats` - total/new/banned stats
+  - `/user <id>` - show full user details
+  - `/ban <telegramId>` - block user messaging
+  - `/unban <telegramId>` - unblock user
   - `/broadcast <message>` - send message to all users
+- Relay mapping cleanup background job (removes old rows)
+- Rate limiting for user messages to reduce spam
+- Supports both polling mode and webhook mode
 
 ## Configuration
 
@@ -41,7 +49,11 @@ Edit `TelegramBotMediator.Presentation/appsettings.json`:
   },
   "BotSettings": {
     "Token": "PUT_YOUR_BOT_TOKEN_HERE",
-    "AdminTelegramId": 123456789
+    "AdminTelegramId": 123456789,
+    "UseWebhook": false,
+    "WebhookUrl": "https://your-service.onrender.com",
+    "WebhookPath": "/telegram/webhook",
+    "UserMessageRateLimitMs": 800
   }
 }
 ```

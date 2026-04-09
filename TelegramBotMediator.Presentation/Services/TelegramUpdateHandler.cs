@@ -12,9 +12,11 @@ namespace TelegramBotMediator.Presentation.Services;
 public sealed class TelegramUpdateHandler(
     ILogger<TelegramUpdateHandler> logger,
     IStateService stateService,
+    IRateLimitService rateLimitService,
     IUserService userService,
     IMessageRelayService relayService,
-    long adminTelegramId) : IUpdateHandler
+    long adminTelegramId,
+    int userMessageRateLimitMs) : IUpdateHandler
 {
     public async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)
     {
@@ -44,12 +46,79 @@ public sealed class TelegramUpdateHandler(
 
     private async Task HandleAdminMessageAsync(ITelegramBotClient botClient, Message message, CancellationToken cancellationToken)
     {
+        if (message.Text is "/stats")
+        {
+            var users = await userService.GetAllAsync(cancellationToken);
+            var total = users.Count;
+            var today = users.Count(x => x.CreatedAt >= DateTime.UtcNow.Date);
+            var banned = users.Count(x => x.IsBanned);
+            var text = $"Jami foydalanuvchilar: {total}\nBugun qo'shilganlar: {today}\nBloklanganlar: {banned}";
+            await botClient.SendMessage(adminTelegramId, text, cancellationToken: cancellationToken);
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(message.Text) && message.Text.StartsWith("/user ", StringComparison.OrdinalIgnoreCase))
+        {
+            var idText = message.Text["/user ".Length..].Trim();
+            if (!int.TryParse(idText, out var userId))
+            {
+                await botClient.SendMessage(adminTelegramId, "Foydalanish: /user <id>", cancellationToken: cancellationToken);
+                return;
+            }
+
+            var user = await userService.GetByIdAsync(userId, cancellationToken);
+            if (user is null)
+            {
+                await botClient.SendMessage(adminTelegramId, "Foydalanuvchi topilmadi.", cancellationToken: cancellationToken);
+                return;
+            }
+
+            var userDetails = $"""
+                               ID: {user.Id}
+                               Ism: {user.FirstName} {user.LastName}
+                               TelegramId: {user.TelegramId}
+                               Telefon: {user.PhoneNumber}
+                               Manzil: {user.Address}
+                               Holati: {(user.IsBanned ? "Bloklangan" : "Faol")}
+                               """;           
+            await botClient.SendMessage(adminTelegramId, userDetails, cancellationToken: cancellationToken);
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(message.Text) && message.Text.StartsWith("/ban ", StringComparison.OrdinalIgnoreCase))
+        {
+            var idText = message.Text["/ban ".Length..].Trim();
+            if (!long.TryParse(idText, out var telegramId))
+            {
+                await botClient.SendMessage(adminTelegramId, "Foydalanish: /ban <telegramId>", cancellationToken: cancellationToken);
+                return;
+            }
+
+            var banResult = await userService.BanAsync(telegramId, cancellationToken);
+            await botClient.SendMessage(adminTelegramId, banResult ? "Foydalanuvchi bloklandi." : "Foydalanuvchi topilmadi.", cancellationToken: cancellationToken);
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(message.Text) && message.Text.StartsWith("/unban ", StringComparison.OrdinalIgnoreCase))
+        {
+            var idText = message.Text["/unban ".Length..].Trim();
+            if (!long.TryParse(idText, out var telegramId))
+            {
+                await botClient.SendMessage(adminTelegramId, "Foydalanish: /unban <telegramId>", cancellationToken: cancellationToken);
+                return;
+            }
+
+            var unbanResult = await userService.UnbanAsync(telegramId, cancellationToken);
+            await botClient.SendMessage(adminTelegramId, unbanResult ? "Foydalanuvchi blokdan chiqarildi." : "Foydalanuvchi topilmadi.", cancellationToken: cancellationToken);
+            return;
+        }
+
         if (message.Text is "/users")
         {
             var users = await userService.GetAllAsync(cancellationToken);
             var text = users.Count == 0
                 ? "Hozircha foydalanuvchilar yo'q."
-                : string.Join(Environment.NewLine, users.Select(u => $"{u.Id}. {u.FirstName} {u.LastName} - {u.PhoneNumber}"));
+                : string.Join(Environment.NewLine, users.Select(u => $"{u.Id}. {u.FirstName} {u.LastName} - {u.PhoneNumber} ({(u.IsBanned ? "BANNED" : "ACTIVE")})"));
             await botClient.SendMessage(adminTelegramId, text, cancellationToken: cancellationToken);
             return;
         }
@@ -81,7 +150,7 @@ public sealed class TelegramUpdateHandler(
 
     private async Task HandleUserMessageAsync(ITelegramBotClient botClient, Message message, long telegramId, CancellationToken cancellationToken)
     {
-        stateService.TrackMessage(telegramId, message.MessageId);
+        await stateService.TrackMessageAsync(telegramId, message.MessageId, cancellationToken);
 
         if (message.Text == "/start")
         {
@@ -90,13 +159,19 @@ public sealed class TelegramUpdateHandler(
             var existing = await userService.GetByTelegramIdAsync(telegramId, cancellationToken);
             if (existing is not null)
             {
-                stateService.SetState(telegramId, UserState.Registered);
+                if (existing.IsBanned)
+                {
+                    await SendAndTrackAsync(botClient, message.Chat.Id, telegramId, "Siz uchun botdan foydalanish vaqtincha cheklangan.", cancellationToken: cancellationToken);
+                    return;
+                }
+
+                await stateService.SetStateAsync(telegramId, UserState.Registered, cancellationToken);
                 await SendAndTrackAsync(botClient, message.Chat.Id, telegramId, "Siz allaqachon ro'yxatdan o'tgansiz. Qanday savolingiz bor?", cancellationToken: cancellationToken);
                 return;
             }
 
-            stateService.ClearRegistration(telegramId);
-            stateService.SetState(telegramId, UserState.WaitingForFirstName);
+            await stateService.ClearRegistrationAsync(telegramId, cancellationToken);
+            await stateService.SetStateAsync(telegramId, UserState.WaitingForFirstName, cancellationToken);
             await SendAndTrackAsync(
                 botClient,
                 message.Chat.Id,
@@ -107,11 +182,17 @@ public sealed class TelegramUpdateHandler(
         }
 
         var existingUser = await userService.GetByTelegramIdAsync(telegramId, cancellationToken);
-        var currentState = stateService.GetState(telegramId);
+        if (existingUser is not null && existingUser.IsBanned)
+        {
+            await SendAndTrackAsync(botClient, message.Chat.Id, telegramId, "Siz uchun botdan foydalanish vaqtincha cheklangan.", cancellationToken: cancellationToken);
+            return;
+        }
+
+        var currentState = await stateService.GetStateAsync(telegramId, cancellationToken);
 
         if (existingUser is not null && currentState != UserState.Registered)
         {
-            stateService.SetState(telegramId, UserState.Registered);
+            await stateService.SetStateAsync(telegramId, UserState.Registered, cancellationToken);
             currentState = UserState.Registered;
         }
 
@@ -123,12 +204,17 @@ public sealed class TelegramUpdateHandler(
 
         if (currentState == UserState.Registered)
         {
+            if (!rateLimitService.IsAllowed(telegramId, TimeSpan.FromMilliseconds(userMessageRateLimitMs)))
+            {
+                return;
+            }
+
             var userMessageText = message.Text ?? message.Caption ?? "[Matnsiz xabar]";
             await relayService.RelayUserMessageToAdminAsync(telegramId, userMessageText, cancellationToken);
             return;
         }
 
-        var registration = stateService.GetOrCreateRegistrationData(telegramId);
+        var registration = await stateService.GetOrCreateRegistrationDataAsync(telegramId, cancellationToken);
 
         switch (currentState)
         {
@@ -140,7 +226,8 @@ public sealed class TelegramUpdateHandler(
                 }
 
                 registration.FirstName = message.Text.Trim();
-                stateService.SetState(telegramId, UserState.WaitingForLastName);
+                await stateService.SaveRegistrationDataAsync(telegramId, registration, cancellationToken);
+                await stateService.SetStateAsync(telegramId, UserState.WaitingForLastName, cancellationToken);
                 await SendAndTrackAsync(botClient, message.Chat.Id, telegramId, "Familiyangizni kiriting:", cancellationToken: cancellationToken);
                 break;
 
@@ -152,7 +239,8 @@ public sealed class TelegramUpdateHandler(
                 }
 
                 registration.LastName = message.Text.Trim();
-                stateService.SetState(telegramId, UserState.WaitingForPhone);
+                await stateService.SaveRegistrationDataAsync(telegramId, registration, cancellationToken);
+                await stateService.SetStateAsync(telegramId, UserState.WaitingForPhone, cancellationToken);
 
                 var contactButton = KeyboardButton.WithRequestContact("Telefon raqamni yuborish");
                 var keyboard = new ReplyKeyboardMarkup(contactButton)
@@ -162,7 +250,7 @@ public sealed class TelegramUpdateHandler(
                 };
 
                 var phonePrompt = await botClient.SendMessage(message.Chat.Id, "Telefon raqamingizni yuboring:", replyMarkup: keyboard, cancellationToken: cancellationToken);
-                stateService.TrackMessage(telegramId, phonePrompt.MessageId);
+                await stateService.TrackMessageAsync(telegramId, phonePrompt.MessageId, cancellationToken);
                 break;
 
             case UserState.WaitingForPhone:
@@ -175,9 +263,10 @@ public sealed class TelegramUpdateHandler(
                 }
 
                 registration.PhoneNumber = message.Contact.PhoneNumber.Trim();
-                stateService.SetState(telegramId, UserState.WaitingForAddress);
+                await stateService.SaveRegistrationDataAsync(telegramId, registration, cancellationToken);
+                await stateService.SetStateAsync(telegramId, UserState.WaitingForAddress, cancellationToken);
                 var addressPrompt = await botClient.SendMessage(message.Chat.Id, "Manzilingizni kiriting:", replyMarkup: new ReplyKeyboardRemove(), cancellationToken: cancellationToken);
-                stateService.TrackMessage(telegramId, addressPrompt.MessageId);
+                await stateService.TrackMessageAsync(telegramId, addressPrompt.MessageId, cancellationToken);
                 break;
 
             case UserState.WaitingForAddress:
@@ -189,9 +278,8 @@ public sealed class TelegramUpdateHandler(
 
                 registration.Address = message.Text.Trim();
                 await userService.RegisterAsync(telegramId, registration.FirstName, registration.LastName, registration.PhoneNumber, registration.Address, cancellationToken);
-                stateService.SetState(telegramId, UserState.Registered);
-                stateService.ClearRegistration(telegramId);
-                stateService.SetState(telegramId, UserState.Registered);
+                await stateService.ClearRegistrationAsync(telegramId, cancellationToken);
+                await stateService.SetStateAsync(telegramId, UserState.Registered, cancellationToken);
                 await ClearTrackedMessagesAsync(botClient, message.Chat.Id, telegramId, cancellationToken);
 
                 await SendAndTrackAsync(botClient, message.Chat.Id, telegramId, "Siz muvaffaqiyatli ro'yxatdan o'tdingiz. Qanday savolingiz bor?", cancellationToken: cancellationToken);
@@ -200,14 +288,14 @@ public sealed class TelegramUpdateHandler(
             default:
                 logger.LogWarning("Missing or unknown state for user {TelegramId}", telegramId);
                 await SendAndTrackAsync(botClient, message.Chat.Id, telegramId, "Holat aniqlanmadi. Iltimos, /start buyrug'ini qayta yuboring.", cancellationToken: cancellationToken);
-                stateService.ClearRegistration(telegramId);
+                await stateService.ClearRegistrationAsync(telegramId, cancellationToken);
                 break;
         }
     }
 
     private async Task ClearTrackedMessagesAsync(ITelegramBotClient botClient, long chatId, long telegramId, CancellationToken cancellationToken)
     {
-        var tracked = stateService.GetTrackedMessages(telegramId);
+        var tracked = await stateService.GetTrackedMessagesAsync(telegramId, cancellationToken);
         foreach (var messageId in tracked)
         {
             try
@@ -220,12 +308,12 @@ public sealed class TelegramUpdateHandler(
             }
         }
 
-        stateService.ClearTrackedMessages(telegramId);
+        await stateService.ClearTrackedMessagesAsync(telegramId, cancellationToken);
     }
 
     private async Task SendAndTrackAsync(ITelegramBotClient botClient, long chatId, long telegramId, string text, CancellationToken cancellationToken)
     {
         var sent = await botClient.SendMessage(chatId, text, cancellationToken: cancellationToken);
-        stateService.TrackMessage(telegramId, sent.MessageId);
+        await stateService.TrackMessageAsync(telegramId, sent.MessageId, cancellationToken);
     }
 }

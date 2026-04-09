@@ -1,3 +1,4 @@
+using Polly;
 using Telegram.Bot;
 using TelegramBotMediator.Application.Abstractions.Repositories;
 using TelegramBotMediator.Application.Abstractions.Services;
@@ -12,6 +13,15 @@ public sealed class MessageRelayService(
     IUserService userService,
     long adminTelegramId) : IMessageRelayService
 {
+    private readonly ResiliencePipeline _pipeline = new ResiliencePipelineBuilder()
+        .AddRetry(new Polly.Retry.RetryStrategyOptions
+        {
+            MaxRetryAttempts = 3,
+            Delay = TimeSpan.FromMilliseconds(300),
+            BackoffType = DelayBackoffType.Exponential
+        })
+        .Build();
+
     public async Task<int> RelayUserMessageToAdminAsync(long userTelegramId, string userMessage, CancellationToken cancellationToken = default)
     {
         var user = await userRepository.GetByTelegramIdAsync(userTelegramId, cancellationToken);
@@ -29,7 +39,9 @@ public sealed class MessageRelayService(
                          {userMessage}
                          """;
 
-        var sent = await botClient.SendMessage(adminTelegramId, relayText, cancellationToken: cancellationToken);
+        var sent = await _pipeline.ExecuteAsync(
+            async token => await botClient.SendMessage(adminTelegramId, relayText, cancellationToken: token),
+            cancellationToken);
         await relayMapRepository.AddAsync(new MessageRelayMap
         {
             ForwardedMessageId = sent.MessageId,
@@ -48,7 +60,9 @@ public sealed class MessageRelayService(
             return false;
         }
 
-        await botClient.SendMessage(map.UserTelegramId, adminMessage, cancellationToken: cancellationToken);
+        await _pipeline.ExecuteAsync(
+            async token => await botClient.SendMessage(map.UserTelegramId, adminMessage, cancellationToken: token),
+            cancellationToken);
         return true;
     }
 
@@ -57,7 +71,14 @@ public sealed class MessageRelayService(
         var users = await userService.GetAllAsync(cancellationToken);
         foreach (var user in users)
         {
-            await botClient.SendMessage(user.TelegramId, message, cancellationToken: cancellationToken);
+            if (user.IsBanned)
+            {
+                continue;
+            }
+
+            await _pipeline.ExecuteAsync(
+                async token => await botClient.SendMessage(user.TelegramId, message, cancellationToken: token),
+                cancellationToken);
         }
     }
 }

@@ -1,9 +1,10 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Serilog;
 using Telegram.Bot;
+using Telegram.Bot.Types;
 using TelegramBotMediator.Application;
 using TelegramBotMediator.Application.Abstractions.Repositories;
 using TelegramBotMediator.Application.Abstractions.Services;
@@ -13,22 +14,22 @@ using TelegramBotMediator.Infrastructure.Data;
 using TelegramBotMediator.Presentation.Configuration;
 using TelegramBotMediator.Presentation.Services;
 
-var builder = Host.CreateApplicationBuilder(args);
+var builder = WebApplication.CreateBuilder(args);
 builder.Configuration
     .SetBasePath(AppContext.BaseDirectory)
     .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
     .AddEnvironmentVariables();
 
-builder.Services.AddLogging(logging =>
-{
-    logging.ClearProviders();
-    logging.AddConsole();
-});
+Log.Logger = new LoggerConfiguration()
+    .Enrich.FromLogContext()
+    .WriteTo.Console()
+    .CreateLogger();
+
+builder.Services.AddLogging(logging => logging.AddSerilog(Log.Logger, dispose: true));
 
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
 
-builder.Services.Configure<BotSettings>(builder.Configuration.GetSection(BotSettings.SectionName));
 var botSettings = builder.Configuration.GetSection(BotSettings.SectionName).Get<BotSettings>()
                  ?? throw new InvalidOperationException("BotSettings section is missing.");
 
@@ -47,14 +48,27 @@ builder.Services.AddScoped<IMessageRelayService>(sp => new MessageRelayService(
 builder.Services.AddScoped<TelegramUpdateHandler>(sp => new TelegramUpdateHandler(
     sp.GetRequiredService<ILogger<TelegramUpdateHandler>>(),
     sp.GetRequiredService<IStateService>(),
+    sp.GetRequiredService<IRateLimitService>(),
     sp.GetRequiredService<IUserService>(),
     sp.GetRequiredService<IMessageRelayService>(),
-    botSettings.AdminTelegramId));
-builder.Services.AddHostedService<BotPollingService>();
+    botSettings.AdminTelegramId,
+    botSettings.UserMessageRateLimitMs));
 
-var host = builder.Build();
+if (botSettings.UseWebhook)
+{
+    builder.Services.AddSingleton(botSettings);
+    builder.Services.AddHostedService<WebhookSetupService>();
+}
+else
+{
+    builder.Services.AddHostedService<BotPollingService>();
+}
 
-using (var scope = host.Services.CreateScope())
+builder.Services.AddHostedService<RelayCleanupService>();
+
+var app = builder.Build();
+
+using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     if (db.Database.IsNpgsql())
@@ -67,4 +81,14 @@ using (var scope = host.Services.CreateScope())
     }
 }
 
-await host.RunAsync();
+if (botSettings.UseWebhook)
+{
+    var webhookPath = botSettings.WebhookPath.StartsWith('/') ? botSettings.WebhookPath : $"/{botSettings.WebhookPath}";
+    app.MapPost(webhookPath, async (Update update, TelegramUpdateHandler updateHandler, ITelegramBotClient botClient, CancellationToken ct) =>
+    {
+        await updateHandler.HandleUpdateAsync(botClient, update, ct);
+        return Results.Ok();
+    });
+}
+
+await app.RunAsync();

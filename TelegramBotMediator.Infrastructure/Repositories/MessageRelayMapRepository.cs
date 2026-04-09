@@ -17,4 +17,20 @@ public sealed class MessageRelayMapRepository(AppDbContext dbContext) : IMessage
     {
         return dbContext.MessageRelayMaps.FirstOrDefaultAsync(x => x.ForwardedMessageId == forwardedMessageId, cancellationToken);
     }
+
+    public async Task<int> DeleteOlderThanAsync(DateTime olderThanUtc, CancellationToken cancellationToken = default)
+    {
+        var oldMaps = await dbContext.MessageRelayMaps
+            .Where(x => x.CreatedAt < olderThanUtc)
+            .ToListAsync(cancellationToken);
+
+        if (oldMaps.Count == 0)
+        {
+            return 0;
+        }
+
+        dbContext.MessageRelayMaps.RemoveRange(oldMaps);
+        await dbContext.SaveChangesAsync(cancellationToken);
+        return oldMaps.Count;
+    }
 }
