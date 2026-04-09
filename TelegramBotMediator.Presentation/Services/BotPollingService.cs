@@ -17,6 +17,11 @@ public sealed class BotPollingService(
         var me = await botClient.GetMe(stoppingToken);
         logger.LogInformation("Bot started: {Username} ({Id})", me.Username, me.Id);
 
+        // Polling (getUpdates) and webhook cannot work together.
+        // Ensure stale webhook is removed on startup to prevent 409 conflicts.
+        await botClient.DeleteWebhook(dropPendingUpdates: false, cancellationToken: stoppingToken);
+        logger.LogInformation("Webhook disabled for polling mode.");
+
         var receiverOptions = new ReceiverOptions
         {
             AllowedUpdates = Array.Empty<UpdateType>()
