@@ -13,6 +13,13 @@ public static class DependencyInjection
     {
         var connectionString = configuration.GetConnectionString("DefaultConnection")
                                ?? "Data Source=telegram-bot.db";
+        var databaseUrl = configuration["DATABASE_URL"];
+
+        if (string.IsNullOrWhiteSpace(configuration.GetConnectionString("DefaultConnection"))
+            && !string.IsNullOrWhiteSpace(databaseUrl))
+        {
+            connectionString = databaseUrl;
+        }
 
         services.AddDbContext<AppDbContext>(options =>
         {
