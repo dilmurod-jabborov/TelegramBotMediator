@@ -1,0 +1,14 @@
+bin/
+obj/
+.vs/
+*.user
+*.suo
+
+# Local runtime files
+*.db
+*.db-shm
+*.db-wal
+
+# Sensitive local config
+TelegramBotMediator.Presentation/appsettings.json
+TelegramBotMediator.Presentation/appsettings.Development.json
